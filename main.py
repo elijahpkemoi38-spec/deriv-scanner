@@ -7,11 +7,12 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
+# --- THE ENHANCED LIVE UI ---
 html_content = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>DERIV_OS // SENTINEL_V1</title>
+    <title>DERIV_OS // SENTINEL_V1_FIXED</title>
     <style>
         body { background: #020202; color: #00ff41; font-family: 'Courier New', monospace; margin: 0; overflow: hidden; }
         .top-bar { display: flex; justify-content: space-between; padding: 10px 20px; border-bottom: 1px solid #00ff41; background: #000; }
@@ -43,10 +44,10 @@ html_content = """
             <div id="perc-R_100" style="font-size: 22px; font-weight: bold;">E: --% | O: --%</div>
             <div class="balance-bar"><div id="bar-e-R_100" class="even-fill" style="width:50%"></div><div id="bar-o-R_100" class="odd-fill" style="width:50%"></div></div>
         </div>
-        <div class="market-card" id="card-1S100" onclick="selectMarket('1S100')">
+        <div class="market-card" id="card-1HZ100V" onclick="selectMarket('1HZ100V')">
             <div style="font-size: 11px; color: #888;">VOLATILITY 100 (1S) INDEX</div>
-            <div id="perc-1S100" style="font-size: 22px; font-weight: bold;">E: --% | O: --%</div>
-            <div class="balance-bar"><div id="bar-e-1S100" class="even-fill" style="width:50%"></div><div id="bar-o-1S100" class="odd-fill" style="width:50%"></div></div>
+            <div id="perc-1HZ100V" style="font-size: 22px; font-weight: bold;">E: --% | O: --%</div>
+            <div class="balance-bar"><div id="bar-e-1HZ100V" class="even-fill" style="width:50%"></div><div id="bar-o-1HZ100V" class="odd-fill" style="width:50%"></div></div>
         </div>
     </div>
 
@@ -54,7 +55,7 @@ html_content = """
         <div class="sidebar">
             <input type="password" id="token" placeholder="API_TOKEN_KEY">
             <button class="btn-run btn-init" id="init-btn" onclick="connectSystem()">CONNECT_SYSTEM</button>
-            <hr border="1" color="#222" style="margin: 20px 0;">
+            <hr style="border: 0; border-top: 1px solid #222; margin: 20px 0;">
             <label style="font-size: 10px;">STAKE_AMOUNT</label>
             <input type="number" id="stake" value="0.35" step="0.01">
             <label style="font-size: 10px;">PREDICTION_TYPE</label>
@@ -100,11 +101,12 @@ html_content = """
                 const data = JSON.parse(e.data);
                 if (data.balance) document.getElementById('bal-display').innerText = `BALANCE: $${data.balance}`;
                 if (data.markets) {
-                    sonar.play(); // Play sonar beep on every packet update
+                    sonar.play();
                     for (const [sym, val] of Object.entries(data.markets)) {
-                        document.getElementById(`perc-${sym}`).innerText = `E: ${val.e}% | O: ${val.o}%`;
-                        document.getElementById(`bar-e-${sym}`).style.width = val.e + "%";
-                        document.getElementById(`bar-o-${sym}`).style.width = val.o + "%";
+                        const targetId = sym === "1HZ100V" ? "1HZ100V" : "R_100";
+                        document.getElementById(`perc-${targetId}`).innerText = `E: ${val.e}% | O: ${val.o}%`;
+                        document.getElementById(`bar-e-${targetId}`).style.width = val.e + "%";
+                        document.getElementById(`bar-o-${targetId}`).style.width = val.o + "%";
                         updateMatrix(sym, val.e, val.o);
                     }
                 }
@@ -114,7 +116,7 @@ html_content = """
 
         function updateMatrix(sym, e, o) {
             const m = document.getElementById('matrix-bg');
-            const codeLine = `HEX_DATA_${sym}_SIG: [${Math.random().toString(16).slice(2,8)}] >> E:${e}% O:${o}% \\n`;
+            const codeLine = `PACKET_${sym}_SIG: [${Math.random().toString(16).slice(2,8)}] >> E:${e}% O:${o}% \\n`;
             m.innerText = codeLine + m.innerText;
             if(m.innerText.length > 2000) m.innerText = m.innerText.substring(0, 1500);
         }
@@ -144,44 +146,54 @@ async def get(): return HTMLResponse(html_content)
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    history = {"R_100": [], "1S100": []}
+    # Corrected Symbols for Deriv API
+    history = {"R_100": [], "1HZ100V": []}
     
     try:
         init_data = await websocket.receive_json()
         token = init_data.get('token')
         
         async with websockets.connect("wss://ws.binaryws.com/websockets/v3?app_id=1089") as deriv_ws:
+            # 1. Authorize session
             await deriv_ws.send(json.dumps({"authorize": token}))
+            
+            # 2. Subscribe to correct symbols
             await deriv_ws.send(json.dumps({"ticks": "R_100", "subscribe": 1}))
-            await deriv_ws.send(json.dumps({"ticks": "1S100", "subscribe": 1}))
+            await deriv_ws.send(json.dumps({"ticks": "1HZ100V", "subscribe": 1}))
 
             async def listen_deriv():
                 async for message in deriv_ws:
                     msg = json.loads(message)
                     if "authorize" in msg:
                         await websocket.send_json({"balance": msg['authorize']['balance']})
+                    
                     if "tick" in msg:
                         sym = msg['tick']['symbol']
-                        digit = int(str(msg['tick']['quote'])[-1])
-                        history[sym].append(digit)
-                        if len(history[sym]) > 50: history[sym].pop(0)
-                        e_perc = int((sum(1 for d in history[sym] if d % 2 == 0)/len(history[sym]))*100)
-                        await websocket.send_json({"markets": {sym: {"e": e_perc, "o": 100 - e_perc}}})
+                        if sym in history:
+                            digit = int(str(msg['tick']['quote'])[-1])
+                            history[sym].append(digit)
+                            if len(history[sym]) > 50: history[sym].pop(0)
+                            e_perc = int((sum(1 for d in history[sym] if d % 2 == 0)/len(history[sym]))*100)
+                            await websocket.send_json({"markets": {sym: {"e": e_perc, "o": 100 - e_perc}}})
+                    
                     if "buy" in msg:
-                        await websocket.send_json({"log": f"MANUAL_TRADE_EXECUTED: {msg['buy']['contract_id']}", "win": True})
+                        await websocket.send_json({"log": f"TRADE_SUCCESS ID: {msg['buy']['contract_id']}", "win": True})
+                    
                     if "error" in msg:
-                        await websocket.send_json({"log": f"FAILED: {msg['error']['message']}", "win": False})
+                        await websocket.send_json({"log": f"API_ERROR: {msg['error']['message']}", "win": False})
 
             async def listen_frontend():
                 while True:
                     data = await websocket.receive_json()
                     if data.get('action') == 'trade':
+                        # Ensure buy command uses correct API symbol mapping
+                        api_symbol = "R_100" if data['symbol'] == "R_100" else "1HZ100V"
                         await deriv_ws.send(json.dumps({
                             "buy": 1, "price": float(data['stake']),
                             "parameters": {
                                 "amount": float(data['stake']), "basis": "stake",
                                 "contract_type": data['type'], "currency": "USD",
-                                "duration": 1, "duration_unit": "t", "symbol": data['symbol']
+                                "duration": 1, "duration_unit": "t", "symbol": api_symbol
                             }
                         }))
 
